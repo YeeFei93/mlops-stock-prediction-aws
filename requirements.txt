@@ -1,0 +1,35 @@
+# Python dependencies
+pandas>=1.5.0
+numpy>=1.21.0
+scikit-learn>=1.1.0
+yfinance>=0.2.0
+boto3>=1.26.0
+joblib>=1.2.0
+
+# Deep Learning
+tensorflow>=2.10.0
+keras>=2.10.0
+
+# Time Series
+prophet>=1.1.0
+statsmodels>=0.13.0
+
+# API and Web
+flask>=2.2.0
+fastapi>=0.95.0
+uvicorn>=0.20.0
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.28.0
+pydantic>=1.10.0
+
+# Development
+pytest>=7.0.0
+black>=22.0.0
+flake8>=5.0.0
+jupyter>=1.0.0
+
+# Monitoring
+mlflow>=2.0.0
+wandb>=0.13.0
