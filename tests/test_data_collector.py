@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import Mock, patch, MagicMock
 import pandas as pd
 import boto3
-from moto import mock_s3
+from moto import mock_aws
 import os
 import sys
 
@@ -16,7 +16,7 @@ from data_ingestion.stock_data_collector import StockDataCollector
 
 class TestStockDataCollector(unittest.TestCase):
     
-    @mock_s3
+    @mock_aws
     def setUp(self):
         """Set up test fixtures"""
         self.bucket_name = 'test-mlops-bucket'
@@ -92,9 +92,16 @@ class TestStockDataCollector(unittest.TestCase):
         self.assertFalse(result['MA_5'].iloc[-1] == 0)
         self.assertTrue(0 <= result['RSI'].iloc[-1] <= 100)
     
-    @mock_s3
+    @mock_aws
     def test_upload_to_s3_success(self):
         """Test successful S3 upload"""
+        # Reinitialize S3 for this test
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        s3_client.create_bucket(Bucket=self.bucket_name)
+        
+        # Create new collector instance for this test
+        collector = StockDataCollector(self.bucket_name)
+        
         # Create test data
         test_data = {
             'AAPL': pd.DataFrame({
@@ -104,13 +111,13 @@ class TestStockDataCollector(unittest.TestCase):
         }
         
         # Test upload
-        result = self.collector.upload_to_s3(test_data)
+        result = collector.upload_to_s3(test_data)
         
         # Should return True on success
         self.assertTrue(result)
         
         # Check if object was uploaded
-        response = self.s3_client.list_objects_v2(
+        response = s3_client.list_objects_v2(
             Bucket=self.bucket_name,
             Prefix='raw-data/AAPL/'
         )
