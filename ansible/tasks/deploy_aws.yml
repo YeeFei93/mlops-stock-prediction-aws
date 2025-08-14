@@ -1,0 +1,138 @@
+---
+# AWS Infrastructure Deployment Tasks
+
+- name: Create temporary directory for deployment files
+  tempfile:
+    state: directory
+    suffix: "_mlops_deploy"
+  register: temp_dir
+
+- name: Copy deployment scripts to temp directory
+  copy:
+    src: "{{ playbook_dir }}/../deployment/"
+    dest: "{{ temp_dir.path }}/"
+    mode: '0755'
+  
+- name: Copy Lambda function code
+  copy:
+    src: "{{ playbook_dir }}/../lambda_simple.py"
+    dest: "{{ temp_dir.path }}/"
+    mode: '0644'
+
+- name: Create Lambda deployment package
+  archive:
+    path: 
+      - "{{ temp_dir.path }}/lambda_simple.py"
+    dest: "{{ temp_dir.path }}/lambda_deployment.zip"
+    format: zip
+
+- name: Deploy AWS infrastructure using Python script
+  command: >
+    python3 {{ temp_dir.path }}/deploy_aws.py
+  environment:
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+    PROJECT_NAME: "{{ project_name }}"
+    ENVIRONMENT: "{{ environment }}"
+    LAMBDA_MEMORY: "{{ lambda_memory_size }}"
+    LAMBDA_TIMEOUT: "{{ lambda_timeout }}"
+    S3_LIFECYCLE_DAYS: "{{ s3_lifecycle_days }}"
+    SCHEDULE_EXPRESSION: "{{ schedule_expression }}"
+    STOCK_SYMBOLS: "{{ stock_symbols | join(',') }}"
+  register: aws_deployment
+  changed_when: "'CREATE_COMPLETE' in aws_deployment.stdout or 'UPDATE_COMPLETE' in aws_deployment.stdout"
+  failed_when: aws_deployment.rc != 0
+
+- name: Parse AWS deployment output
+  set_fact:
+    deployment_outputs: "{{ aws_deployment.stdout_lines | select('match', '^OUTPUT:') | map('regex_replace', '^OUTPUT: ', '') | list }}"
+
+- name: Display AWS deployment results
+  debug:
+    msg: |
+      AWS Infrastructure Deployment Results:
+      {% for output in deployment_outputs %}
+      {{ output }}
+      {% endfor %}
+
+- name: Extract S3 bucket name from outputs
+  set_fact:
+    s3_bucket_name: "{{ deployment_outputs | select('match', '.*S3.*:') | map('regex_replace', '^.*: ', '') | first | default('') }}"
+
+- name: Extract Lambda function name from outputs
+  set_fact:
+    lambda_function_name: "{{ deployment_outputs | select('match', '.*Lambda.*:') | map('regex_replace', '^.*: ', '') | first | default('') }}"
+
+- name: Store deployment information
+  copy:
+    content: |
+      AWS Deployment Information
+      =========================
+      Timestamp: {{ ansible_date_time.iso8601 }}
+      Environment: {{ environment }}
+      Region: {{ aws_region }}
+      
+      Resources Created:
+      {% for output in deployment_outputs %}
+      {{ output }}
+      {% endfor %}
+      
+      Deployment Command: python3 deploy_aws.py
+      Return Code: {{ aws_deployment.rc }}
+    dest: "{{ playbook_dir }}/../logs/aws_deployment_{{ ansible_date_time.epoch }}.log"
+
+- name: Verify Lambda function exists
+  command: >
+    aws lambda get-function --function-name {{ lambda_function_name }}
+  environment:
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+  register: lambda_check
+  changed_when: false
+  when: lambda_function_name != ""
+
+- name: Verify S3 bucket exists
+  command: >
+    aws s3 ls {{ s3_bucket_name }}
+  environment:
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+  register: s3_check
+  changed_when: false
+  when: s3_bucket_name != ""
+
+- name: Test Lambda function
+  command: >
+    aws lambda invoke 
+    --function-name {{ lambda_function_name }} 
+    --payload '{"test": true}' 
+    {{ temp_dir.path }}/lambda_response.json
+  environment:
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+  register: lambda_test
+  changed_when: false
+  when: lambda_function_name != ""
+
+- name: Read Lambda test response
+  slurp:
+    src: "{{ temp_dir.path }}/lambda_response.json"
+  register: lambda_response_content
+  when: lambda_function_name != "" and lambda_test.rc == 0
+
+- name: Display Lambda test results
+  debug:
+    msg: |
+      Lambda Function Test Results:
+      Status Code: {{ lambda_test.rc if lambda_test is defined else 'N/A' }}
+      Response: {{ lambda_response_content.content | b64decode if lambda_response_content is defined else 'N/A' }}
+  when: lambda_function_name != ""
+
+- name: Clean up temporary directory
+  file:
+    path: "{{ temp_dir.path }}"
+    state: absent
+  when: temp_dir is defined
+
+- name: Set deployment facts for other tasks
+  set_fact:
+    aws_infrastructure_deployed: true
+    aws_s3_bucket: "{{ s3_bucket_name }}"
+    aws_lambda_function: "{{ lambda_function_name }}"
+    aws_deployment_timestamp: "{{ ansible_date_time.iso8601 }}"

@@ -1,0 +1,113 @@
+---
+# Main configuration variables for MLOps Stock Prediction deployment
+
+# Project Configuration
+project_name: "mlops-stock-prediction"
+project_version: "1.0.0"
+deployment_timestamp: "{{ ansible_date_time.iso8601 }}"
+
+# AWS Configuration
+aws_region: "us-east-1"
+aws_profile: "default"  # AWS CLI profile to use
+
+# Application Configuration
+stock_symbols:
+  - "AAPL"
+  - "GOOGL" 
+  - "MSFT"
+  - "TSLA"
+  - "NVDA"
+
+# Lambda Configuration
+lambda_runtime: "python3.9"
+lambda_memory_size: 512
+lambda_timeout: 300
+lambda_handler: "lambda_simple.lambda_handler"
+
+# API Gateway Configuration
+api_gateway_stage: "v1"
+enable_api_gateway: true
+
+# S3 Configuration
+s3_bucket_prefix: "{{ project_name }}-data"
+s3_lifecycle_days: 90
+enable_s3_versioning: true
+enable_s3_encryption: true
+
+# EventBridge Configuration
+schedule_expression: "cron(0 9 * * ? *)"  # Daily at 9 AM UTC
+
+# Docker Configuration
+docker_image_name: "{{ project_name }}"
+docker_registry: ""  # Leave empty for local builds, set for remote registry
+docker_tag: "{{ project_version }}"
+build_docker_image: true
+
+# Kubernetes Configuration
+k8s_namespace: "{{ project_name }}"
+k8s_replicas: 2
+k8s_resource_requests:
+  memory: "256Mi"
+  cpu: "100m"
+k8s_resource_limits:
+  memory: "512Mi"
+  cpu: "500m"
+
+# MLflow Configuration
+mlflow_tracking_uri: "file:///app/mlruns"
+mlflow_backend_store: "file"
+mlflow_artifact_store: "s3"
+
+# Monitoring Configuration
+enable_monitoring: true
+log_retention_days: 14
+enable_cloudwatch_alerts: true
+cost_alert_threshold: 10.00
+
+# Networking Configuration
+enable_vpc: true
+vpc_cidr: "10.0.0.0/16"
+public_subnet_cidrs:
+  - "10.0.1.0/24"
+  - "10.0.2.0/24"
+private_subnet_cidrs:
+  - "10.0.10.0/24"
+  - "10.0.11.0/24"
+
+# Security Configuration
+enable_ssl: false
+ssl_certificate_arn: ""  # Set if using SSL
+allowed_ip_ranges:
+  - "0.0.0.0/0"  # Restrict this in production
+
+# Backup Configuration
+enable_backup: true
+backup_retention_days: 30
+
+# Notification Configuration
+enable_notifications: false
+notification_email: ""  # Set for email notifications
+slack_webhook_url: ""   # Set for Slack notifications
+
+# Feature Flags
+features:
+  terraform_backend: false
+  kubernetes_deployment: false
+  advanced_monitoring: false
+  auto_scaling: false
+  multi_region: false
+
+# Terraform Configuration
+terraform_state_bucket: "{{ project_name }}-terraform-state"
+terraform_lock_table: "{{ project_name }}-terraform-locks"
+terraform_backend_enabled: "{{ features.terraform_backend }}"
+
+# Common Tags
+common_tags:
+  Project: "{{ project_name }}"
+  Environment: "{{ environment }}"
+  ManagedBy: "ansible"
+  Owner: "mlops-team"
+  CostCenter: "engineering"
+  Version: "{{ project_version }}"
+  DeployedAt: "{{ deployment_timestamp }}"

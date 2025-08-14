@@ -1,0 +1,70 @@
+---
+# Production environment specific variables
+
+environment: "prod"
+
+# AWS Configuration (Production)
+aws_region: "us-east-1"
+lambda_memory_size: 512
+lambda_timeout: 300
+
+# API Gateway Configuration
+api_gateway_stage: "v1"
+enable_api_gateway: true
+
+# S3 Configuration
+s3_lifecycle_days: 90
+enable_s3_versioning: true
+enable_s3_encryption: true
+
+# Monitoring (Enhanced for Production)
+log_retention_days: 30
+enable_cloudwatch_alerts: true
+cost_alert_threshold: 10.00
+
+# Security (Strict for Production)
+enable_ssl: false  # Set to true when certificates are configured
+allowed_ip_ranges:
+  - "0.0.0.0/0"  # Restrict this based on your requirements
+
+# Kubernetes (Production Settings)
+k8s_replicas: 2
+k8s_resource_requests:
+  memory: "512Mi"
+  cpu: "200m"
+k8s_resource_limits:
+  memory: "1Gi"
+  cpu: "1000m"
+
+# Backup and Disaster Recovery
+enable_backup: true
+backup_retention_days: 90
+
+# Auto Scaling
+auto_scaling:
+  enabled: false
+  min_replicas: 2
+  max_replicas: 10
+  target_cpu_utilization: 70
+
+# Production Feature Flags
+features:
+  terraform_backend: true
+  kubernetes_deployment: false
+  advanced_monitoring: true
+  auto_scaling: false
+  multi_region: false
+
+# Performance Tuning
+performance:
+  lambda_reserved_concurrency: 100
+  api_gateway_throttling:
+    rate_limit: 1000
+    burst_limit: 2000
+
+# Production Tags
+production_tags:
+  Environment: "production"
+  CriticalityLevel: "high"
+  BackupRequired: "yes"
+  MonitoringLevel: "enhanced"

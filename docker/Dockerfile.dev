@@ -1,0 +1,39 @@
+# MLOps Stock Prediction - Development Environment
+FROM python:3.10-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    FLASK_ENV=development \
+    FLASK_DEBUG=1 \
+    PORT=8080
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd --gid 1000 developer && \
+    useradd --uid 1000 --gid developer --shell /bin/bash --create-home developer
+
+# Set working directory
+WORKDIR /app
+RUN chown -R developer:developer /app
+
+# Copy requirements and install dependencies
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --upgrade pip && \
+    pip install -r requirements-dev.txt
+
+# Switch to non-root user
+USER developer
+
+# Expose port
+EXPOSE $PORT
+
+# Default command for development
+CMD ["python", "-m", "flask", "run", "--host=0.0.0.0", "--port=8080", "--reload"]

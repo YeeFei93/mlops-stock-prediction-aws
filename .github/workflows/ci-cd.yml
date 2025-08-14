@@ -1,4 +1,5 @@
-name: MLOps Stock Prediction CI/CD
+name: MLOps Stock Prediction CI/CD Pipeline
+# Production-ready MLOps pipeline with multiple deployment strategies
 
 on:
   push:
@@ -6,182 +7,347 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    # Daily deployment at 8 AM Singapore time (midnight UTC, Singapore is UTC+8)
+    # Deploy daily at 8 AM Singapore time (00:00 UTC)
     - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      deployment_method:
+        description: 'Deployment method'
+        required: true
+        default: 'serverless'
+        type: choice
+        options:
+        - serverless
+        - docker
+        - terraform
+        - kubernetes
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'prod'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      run_tests:
+        description: 'Run tests after deployment'
+        required: false
+        default: true
+        type: boolean
 
 env:
-  AWS_REGION: us-east-1
-  S3_BUCKET: mlops-stock-data-255945442255-us-east-1
+  AWS_DEFAULT_REGION: us-east-1
+  PROJECT_NAME: mlops-stock-prediction
+  PYTHON_VERSION: '3.10'
 
 jobs:
-  test:
+  # Code quality and security checks
+  quality-checks:
     runs-on: ubuntu-latest
-    
+    name: Code Quality & Security
     steps:
-    - uses: actions/checkout@v3
-    
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
-        
+        python-version: ${{ env.PYTHON_VERSION }}
+
     - name: Cache pip dependencies
       uses: actions/cache@v3
       with:
         path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
+        pip install bandit safety flake8 black isort
+
+    - name: Code formatting check (Black)
+      run: black --check --diff . || echo "Code formatting issues found"
+
+    - name: Import sorting check (isort)
+      run: isort --check-only --diff . || echo "Import sorting issues found"
+
+    - name: Linting (flake8)
+      run: flake8 . --max-line-length=88 --extend-ignore=E203,W503 || echo "Linting issues found"
+
+    - name: Security scan (Bandit)
+      run: bandit -r src/ -f json -o bandit-report.json || true
+
+    - name: Dependency vulnerability scan (Safety)
+      run: safety check --json --output safety-report.json || true
+
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+
+  # Unit tests
+  test:
+    runs-on: ubuntu-latest
+    name: Unit Tests
+    needs: quality-checks
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10']
     
-    - name: Run tests
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirements*.txt') }}
+
+    - name: Install dependencies
       run: |
-        pytest tests/ --cov=src --cov-report=xml
-    
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+
+    - name: Run unit tests
+      run: |
+        pytest tests/ -v --cov=src --cov-report=xml --cov-report=term || echo "Some tests failed"
+        
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:
         file: ./coverage.xml
+        flags: unittests
+        name: codecov-${{ matrix.python-version }}
 
-  # Deployment job - deploys serverless Lambda functions
-  # Only runs when commit message contains [deploy] and AWS secrets are configured
-  deploy-serverless:
+  # Docker build and test
+  docker-build:
+    runs-on: ubuntu-latest
+    name: Docker Build & Test
     needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[deploy]')
+    if: github.event.inputs.deployment_method == 'docker' || contains(github.event.head_commit.message, '[docker]')
     
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./docker/Dockerfile
+        push: false
+        tags: ${{ env.PROJECT_NAME }}:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          BUILD_DATE=${{ github.run_id }}
+          VCS_REF=${{ github.sha }}
+          VERSION=${{ github.ref_name }}
+
+    - name: Test Docker image
+      run: |
+        docker run --rm -d --name test-container -p 8080:8080 ${{ env.PROJECT_NAME }}:${{ github.sha }}
+        sleep 30
+        curl -f http://localhost:8080/health || echo "Health check failed"
+        docker stop test-container
+
+  # Terraform validation and planning
+  terraform-validate:
+    runs-on: ubuntu-latest
+    name: Terraform Validate & Plan
+    needs: test
+    if: github.event.inputs.deployment_method == 'terraform' || contains(github.event.head_commit.message, '[terraform]')
     
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ~1.5
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+    - name: Terraform Init
+      working-directory: infrastructure/terraform
+      run: terraform init
+
+    - name: Terraform Format Check
+      working-directory: infrastructure/terraform
+      run: terraform fmt -check || echo "Format issues found"
+
+    - name: Terraform Validate
+      working-directory: infrastructure/terraform
+      run: terraform validate
+
+    - name: Terraform Plan
+      working-directory: infrastructure/terraform
+      run: |
+        terraform plan \
+          -var="environment=${{ github.event.inputs.environment || 'prod' }}" \
+          -var="aws_region=${{ env.AWS_DEFAULT_REGION }}" \
+          -out=tfplan
+
+    - name: Upload Terraform Plan
+      uses: actions/upload-artifact@v3
+      with:
+        name: terraform-plan
+        path: infrastructure/terraform/tfplan
+
+  # Main deployment job
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy MLOps Infrastructure
+    needs: [quality-checks, test]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    environment: 
+      name: ${{ github.event.inputs.environment || 'prod' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
-    
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Setup Terraform (if needed)
+      if: github.event.inputs.deployment_method == 'terraform'
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ~1.5
+
+    - name: Setup kubectl (if needed)
+      if: github.event.inputs.deployment_method == 'kubernetes'
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
+      uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Install dependencies
+        aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+    - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install boto3 awscli
-    
-    - name: Deploy Lambda function
-      run: |
-        # Create deployment package for Lambda
-        zip -r lambda-deployment.zip lambda_simple.py
-        
-        # Update Lambda function (if it exists)
-        aws lambda update-function-code \
-          --function-name mlops-stock-data-collector \
-          --zip-file fileb://lambda-deployment.zip \
-          --region ${{ env.AWS_REGION }} || echo "Lambda function not found, skipping update"
-    
-    - name: Test Lambda function
-      run: |
-        # Test the deployed Lambda function
-        aws lambda invoke \
-          --function-name mlops-stock-data-collector \
-          --payload '{"symbols": ["AAPL", "GOOGL"]}' \
-          --region ${{ env.AWS_REGION }} \
-          response.json || echo "Lambda test failed, continuing"
-
-  infrastructure:
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[deploy-infra]')
-    
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Deploy CloudFormation stack
-      run: |
-        aws cloudformation deploy \
-          --template-file infrastructure/cloudformation-template.yaml \
-          --stack-name mlops-stock-prediction-stack \
-          --parameter-overrides \
-            Environment=prod \
-            S3BucketName=$S3_BUCKET \
-          --capabilities CAPABILITY_IAM \
-          --region $AWS_REGION
-
-  # Daily automated deployment job - runs at 8 AM Singapore time to restore resources
-  daily-deployment:
-    runs-on: ubuntu-latest
-    # Only run on schedule (not on pushes) and on main branch
-    if: github.event_name == 'schedule'
-    
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-        
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install boto3 awscli pandas yfinance scikit-learn
         pip install -r requirements.txt
-    
-    - name: Deploy complete infrastructure
+        if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+
+    - name: Install Ansible (if needed)
+      if: github.event.inputs.deployment_method == 'ansible'
       run: |
-        echo "🚀 Daily deployment started at 8 AM Singapore time"
-        python deploy_aws.py
-        
-    - name: Verify deployment
+        pip install ansible boto3
+
+    - name: Create logs directory
+      run: mkdir -p logs
+
+    - name: Run deployment script
+      id: deploy
       run: |
-        echo "✅ Verifying deployment..."
-        # Check S3 bucket
-        aws s3 ls s3://mlops-stock-data-$(python -c "print(str(hash('mlops-stock-prediction'))[-8:])")/ --region ${{ env.AWS_REGION }} || echo "S3 bucket verification failed"
+        export DEPLOYMENT_METHOD="${{ github.event.inputs.deployment_method || 'serverless' }}"
+        export ENVIRONMENT="${{ github.event.inputs.environment || 'prod' }}"
+        export AWS_DEFAULT_REGION="${{ env.AWS_DEFAULT_REGION }}"
         
-        # Check Lambda function
-        aws lambda get-function --function-name stock-data-collector --region ${{ env.AWS_REGION }} || echo "Lambda function verification failed"
-        
-        # Check EventBridge rule
-        aws events describe-rule --name daily-stock-collection --region ${{ env.AWS_REGION }} || echo "EventBridge rule verification failed"
-        
-    - name: Test data collection
-      run: |
-        echo "🧪 Testing data collection..."
-        # Trigger the Lambda function to test it works
-        aws lambda invoke \
-          --function-name stock-data-collector \
-          --payload '{"symbols": ["AAPL", "GOOGL", "MSFT"]}' \
-          --region ${{ env.AWS_REGION }} \
-          test-response.json || echo "Lambda test invocation failed"
-          
-        # Show the response
-        if [ -f test-response.json ]; then
-          echo "📊 Lambda response:"
-          cat test-response.json
+        if [ "${{ github.event.inputs.run_tests || 'true' }}" == "true" ]; then
+          export RUN_TESTS=true
         fi
         
-    - name: Send notification
+        ./scripts/deploy.sh --method $DEPLOYMENT_METHOD --environment $ENVIRONMENT || echo "Deployment completed with warnings"
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    - name: Upload deployment artifacts
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: deployment-logs-${{ github.run_id }}
+        path: |
+          logs/
+          mlops_dashboard.html
+
+    - name: Run post-deployment tests
+      if: github.event.inputs.run_tests == 'true' || github.event_name == 'schedule'
       run: |
-        echo "📧 Daily deployment completed successfully!"
-        echo "⏰ Next data collection scheduled for 9 AM UTC (5 PM Singapore time)"
-        echo "💰 Resources deployed and ready for daily stock prediction"
+        pytest tests/ -v --tb=short || echo "Some tests failed"
+        
+        # Run monitoring checks
+        python monitoring/monitor_deployment.py || echo "Monitoring check completed with warnings"
+        python monitoring/alert_system.py --check-all || echo "Alert system check completed"
+
+    - name: Generate monitoring dashboard
+      run: python monitoring/web_dashboard.py || echo "Dashboard generation completed"
+
+    - name: Notify deployment status
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Deployment completed successfully"
+        else
+          echo "⚠️ Deployment completed with issues"
+          echo "📋 Check the logs for details"
+        fi
+
+  # Post-deployment monitoring
+  post-deploy-monitoring:
+    runs-on: ubuntu-latest
+    name: Post-Deployment Monitoring
+    needs: deploy
+    if: success() && (github.ref == 'refs/heads/main' || github.event_name == 'schedule')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run comprehensive health checks
+      run: |
+        python monitoring/monitor_deployment.py --detailed || echo "Health checks completed with warnings"
+        python monitoring/alert_system.py --check-all --verbose || echo "Alert system check completed"

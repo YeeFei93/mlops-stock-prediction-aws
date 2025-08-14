@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mlops-service-account
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/MLOpsEKSServiceRole  # Replace with actual ARN
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mlops-role
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mlops-role-binding
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+subjects:
+- kind: ServiceAccount
+  name: mlops-service-account
+  namespace: mlops-stock-prediction
+roleRef:
+  kind: Role
+  name: mlops-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mlops-registry-secret
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: |
+    # Base64 encoded Docker registry credentials
+    # Format: {"auths":{"registry-url":{"username":"user","password":"pass","email":"email","auth":"base64(user:pass)"}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mlops-network-policy
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+spec:
+  podSelector:
+    matchLabels:
+      app: mlops-stock-prediction
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector: {}
+    - namespaceSelector:
+        matchLabels:
+          name: nginx-ingress
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  - {}  # Allow all egress traffic
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mlops-pdb
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: mlops-stock-prediction
+      component: api

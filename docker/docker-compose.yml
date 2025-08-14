@@ -1,0 +1,151 @@
+# Docker Compose for MLOps Stock Prediction
+# Supports both development and production environments
+
+version: '3.8'
+
+services:
+  # Main application service
+  mlops-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE:-$(date -u +'%Y-%m-%dT%H:%M:%SZ')}
+        VCS_REF: ${VCS_REF:-$(git rev-parse --short HEAD)}
+        VERSION: ${VERSION:-latest}
+    container_name: mlops-stock-prediction-api
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET}
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI:-file:///app/mlruns}
+    volumes:
+      - mlflow_data:/app/mlruns
+      - app_logs:/app/logs
+    networks:
+      - mlops-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Development service (override for dev environment)
+  mlops-api-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    container_name: mlops-stock-prediction-dev
+    ports:
+      - "${DEV_PORT:-8081}:8080"
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET}
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI:-file:///app/mlruns}
+    volumes:
+      - ../src:/app/src:ro
+      - ../lambda_simple.py:/app/lambda_simple.py:ro
+      - mlflow_data:/app/mlruns
+      - app_logs:/app/logs
+    networks:
+      - mlops-network
+    profiles:
+      - dev
+
+  # MLflow tracking server (optional)
+  mlflow-server:
+    image: python:3.10-slim
+    container_name: mlops-mlflow-server
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=file:///app/mlruns
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=/app/mlruns
+    volumes:
+      - mlflow_data:/app/mlruns
+    networks:
+      - mlops-network
+    command: >
+      bash -c "pip install mlflow boto3 &&
+               mlflow server 
+               --backend-store-uri file:///app/mlruns 
+               --default-artifact-root /app/mlruns 
+               --host 0.0.0.0 
+               --port 5000"
+    profiles:
+      - mlflow
+
+  # Nginx reverse proxy (production)
+  nginx:
+    image: nginx:alpine
+    container_name: mlops-nginx
+    ports:
+      - "${NGINX_PORT:-80}:80"
+      - "${NGINX_SSL_PORT:-443}:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - mlops-api
+    networks:
+      - mlops-network
+    profiles:
+      - production
+
+  # Monitoring with Prometheus (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mlops-prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - mlops-network
+    profiles:
+      - monitoring
+
+  # Grafana for visualization (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mlops-grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - mlops-network
+    profiles:
+      - monitoring
+
+# Named volumes for data persistence
+volumes:
+  mlflow_data:
+    driver: local
+  app_logs:
+    driver: local
+  nginx_logs:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+# Network configuration
+networks:
+  mlops-network:
+    driver: bridge
+    name: mlops-stock-prediction-network

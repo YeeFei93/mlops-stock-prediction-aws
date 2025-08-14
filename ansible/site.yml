@@ -1,0 +1,121 @@
+---
+# MLOps Stock Prediction - Main Deployment Playbook
+# Orchestrates the complete deployment of the MLOps infrastructure
+
+- name: Deploy MLOps Stock Prediction Infrastructure
+  hosts: localhost
+  gather_facts: yes
+  become: no
+  vars_files:
+    - vars/main.yml
+    - vars/{{ environment | default('prod') }}.yml
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    
+  pre_tasks:
+    - name: Validate required variables
+      assert:
+        that:
+          - aws_region is defined
+          - project_name is defined
+          - environment is defined
+        fail_msg: "Required variables (aws_region, project_name, environment) must be defined"
+        
+    - name: Check AWS CLI is installed
+      command: aws --version
+      register: aws_version
+      changed_when: false
+      failed_when: aws_version.rc != 0
+      
+    - name: Verify AWS credentials
+      command: aws sts get-caller-identity
+      register: aws_identity
+      changed_when: false
+      failed_when: aws_identity.rc != 0
+      
+    - name: Display AWS account information
+      debug:
+        msg: "Deploying to AWS Account: {{ (aws_identity.stdout | from_json).Account }} in region {{ aws_region }}"
+
+  tasks:
+    - name: Include AWS infrastructure deployment
+      include_tasks: tasks/deploy_aws.yml
+      tags: ['aws', 'infrastructure']
+      
+    - name: Include Docker image building
+      include_tasks: tasks/build_docker.yml
+      tags: ['docker', 'build']
+      when: deploy_docker | default(true)
+      
+    - name: Include Kubernetes deployment
+      include_tasks: tasks/deploy_k8s.yml
+      tags: ['kubernetes', 'k8s']
+      when: deploy_kubernetes | default(false)
+      
+    - name: Include monitoring setup
+      include_tasks: tasks/setup_monitoring.yml
+      tags: ['monitoring', 'alerts']
+      when: enable_monitoring | default(true)
+      
+    - name: Include MLflow setup
+      include_tasks: tasks/setup_mlflow.yml
+      tags: ['mlflow', 'tracking']
+      when: setup_mlflow | default(true)
+
+  post_tasks:
+    - name: Generate deployment summary
+      template:
+        src: templates/deployment_summary.j2
+        dest: "{{ playbook_dir }}/../logs/deployment_summary_{{ ansible_date_time.epoch }}.txt"
+      tags: ['always']
+      
+    - name: Display deployment completion
+      debug:
+        msg: |
+          🎉 MLOps Stock Prediction deployment completed successfully!
+          
+          Environment: {{ environment }}
+          Region: {{ aws_region }}
+          
+          Next steps:
+          1. Check the deployment summary in logs/
+          2. Verify services are running
+          3. Test the prediction API
+          
+          Useful commands:
+          - ansible-playbook -i inventory/{{ environment }} site.yml --tags monitoring
+          - ansible-playbook -i inventory/{{ environment }} site.yml --tags health-check
+      tags: ['always']
+
+---
+# Health check playbook
+- name: Health Check MLOps Infrastructure
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - vars/main.yml
+    - vars/{{ environment | default('prod') }}.yml
+    
+  tasks:
+    - name: Include health check tasks
+      include_tasks: tasks/health_check.yml
+      tags: ['health', 'check', 'monitoring']
+
+---
+# Cleanup playbook
+- name: Cleanup MLOps Infrastructure
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - vars/main.yml
+    - vars/{{ environment | default('prod') }}.yml
+    
+  tasks:
+    - name: Include cleanup tasks
+      include_tasks: tasks/cleanup.yml
+      tags: ['cleanup', 'destroy']
+      
+  handlers:
+    - name: Send cleanup notification
+      debug:
+        msg: "Infrastructure cleanup completed for environment: {{ environment }}"

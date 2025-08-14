@@ -1,0 +1,263 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mlops-stock-prediction
+  labels:
+    name: mlops-stock-prediction
+    environment: production
+    managed-by: kubernetes
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlops-config
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+    component: config
+data:
+  FLASK_ENV: "production"
+  AWS_DEFAULT_REGION: "us-east-1"
+  MLFLOW_TRACKING_URI: "file:///app/mlruns"
+  LOG_LEVEL: "INFO"
+  PORT: "8080"
+  STOCK_SYMBOLS: "AAPL,GOOGL,MSFT,TSLA,NVDA"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mlops-secrets
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+    component: secrets
+type: Opaque
+data:
+  # Base64 encoded values - replace with actual encoded credentials
+  # AWS_ACCESS_KEY_ID: <base64-encoded-access-key>
+  # AWS_SECRET_ACCESS_KEY: <base64-encoded-secret-key>
+  # S3_BUCKET: <base64-encoded-bucket-name>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mlflow-data-pvc
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+    component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: gp2  # Adjust for your cloud provider
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: app-logs-pvc
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+    component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: gp2  # Adjust for your cloud provider
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlops-api
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+    component: api
+    version: v1
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: mlops-stock-prediction
+      component: api
+  template:
+    metadata:
+      labels:
+        app: mlops-stock-prediction
+        component: api
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: mlops-api
+        image: mlops-stock-prediction:latest  # Replace with your actual image
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: mlops-config
+              key: PORT
+        - name: FLASK_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: mlops-config
+              key: FLASK_ENV
+        - name: AWS_DEFAULT_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: mlops-config
+              key: AWS_DEFAULT_REGION
+        - name: MLFLOW_TRACKING_URI
+          valueFrom:
+            configMapKeyRef:
+              name: mlops-config
+              key: MLFLOW_TRACKING_URI
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: mlops-config
+              key: LOG_LEVEL
+        - name: STOCK_SYMBOLS
+          valueFrom:
+            configMapKeyRef:
+              name: mlops-config
+              key: STOCK_SYMBOLS
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: mlops-secrets
+              key: AWS_ACCESS_KEY_ID
+              optional: true
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mlops-secrets
+              key: AWS_SECRET_ACCESS_KEY
+              optional: true
+        - name: S3_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: mlops-secrets
+              key: S3_BUCKET
+              optional: true
+        volumeMounts:
+        - name: mlflow-data
+          mountPath: /app/mlruns
+        - name: app-logs
+          mountPath: /app/logs
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+              - ALL
+      volumes:
+      - name: mlflow-data
+        persistentVolumeClaim:
+          claimName: mlflow-data-pvc
+      - name: app-logs
+        persistentVolumeClaim:
+          claimName: app-logs-pvc
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlops-api-service
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+    component: api
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"  # For AWS
+    # service.beta.kubernetes.io/azure-load-balancer-internal: "true"  # For Azure
+    # cloud.google.com/load-balancer-type: "External"  # For GCP
+spec:
+  type: LoadBalancer  # Change to ClusterIP for internal-only access
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app: mlops-stock-prediction
+    component: api
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mlops-api-ingress
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+    component: ingress
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"  # For SSL
+spec:
+  # tls:  # Uncomment for SSL
+  # - hosts:
+  #   - your-domain.com
+  #   secretName: mlops-tls-secret
+  rules:
+  - host: localhost  # Replace with your actual domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: mlops-api-service
+            port:
+              number: 80

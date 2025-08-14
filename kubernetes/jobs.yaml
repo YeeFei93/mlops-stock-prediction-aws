@@ -1,0 +1,185 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mlops-data-collector
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+    component: data-collector
+spec:
+  schedule: "0 9 * * *"  # Daily at 9 AM UTC (5 PM Singapore time)
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 86400  # Clean up after 24 hours
+      template:
+        metadata:
+          labels:
+            app: mlops-stock-prediction
+            component: data-collector
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          containers:
+          - name: data-collector
+            image: mlops-stock-prediction:latest  # Same image as API
+            imagePullPolicy: Always
+            command: ["python"]
+            args: ["lambda_simple.py"]
+            env:
+            - name: AWS_DEFAULT_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: AWS_DEFAULT_REGION
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: MLFLOW_TRACKING_URI
+            - name: STOCK_SYMBOLS
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: STOCK_SYMBOLS
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-secrets
+                  key: AWS_ACCESS_KEY_ID
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+                  optional: true
+            - name: S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-secrets
+                  key: S3_BUCKET
+                  optional: true
+            volumeMounts:
+            - name: mlflow-data
+              mountPath: /app/mlruns
+            - name: app-logs
+              mountPath: /app/logs
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: false
+              capabilities:
+                drop:
+                  - ALL
+          volumes:
+          - name: mlflow-data
+            persistentVolumeClaim:
+              claimName: mlflow-data-pvc
+          - name: app-logs
+            persistentVolumeClaim:
+              claimName: app-logs-pvc
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mlops-model-training
+  namespace: mlops-stock-prediction
+  labels:
+    app: mlops-stock-prediction
+    component: model-training
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400  # Clean up after 24 hours
+  template:
+    metadata:
+      labels:
+        app: mlops-stock-prediction
+        component: model-training
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: model-trainer
+        image: mlops-stock-prediction:latest
+        imagePullPolicy: Always
+        command: ["python"]
+        args: ["src/model_training/train_model.py"]
+        env:
+        - name: AWS_DEFAULT_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: mlops-config
+              key: AWS_DEFAULT_REGION
+        - name: MLFLOW_TRACKING_URI
+          valueFrom:
+            configMapKeyRef:
+              name: mlops-config
+              key: MLFLOW_TRACKING_URI
+        - name: STOCK_SYMBOLS
+          valueFrom:
+            configMapKeyRef:
+              name: mlops-config
+              key: STOCK_SYMBOLS
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: mlops-secrets
+              key: AWS_ACCESS_KEY_ID
+              optional: true
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mlops-secrets
+              key: AWS_SECRET_ACCESS_KEY
+              optional: true
+        - name: S3_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: mlops-secrets
+              key: S3_BUCKET
+              optional: true
+        volumeMounts:
+        - name: mlflow-data
+          mountPath: /app/mlruns
+        - name: app-logs
+          mountPath: /app/logs
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+              - ALL
+      volumes:
+      - name: mlflow-data
+        persistentVolumeClaim:
+          claimName: mlflow-data-pvc
+      - name: app-logs
+        persistentVolumeClaim:
+          claimName: app-logs-pvc
