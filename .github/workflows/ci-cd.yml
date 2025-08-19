@@ -22,6 +22,18 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+      - name: Delete failed stack if exists
+        run: |
+          set -e
+          STATUS=$(aws cloudformation describe-stacks --stack-name mlops-stock-prediction-stack --region $AWS_REGION --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+            echo "Deleting failed stack..."
+            aws cloudformation delete-stack --stack-name mlops-stock-prediction-stack --region $AWS_REGION
+            echo "Waiting for stack deletion..."
+            aws cloudformation wait stack-delete-complete --stack-name mlops-stock-prediction-stack --region $AWS_REGION
+          else
+            echo "No failed stack to delete. Status: $STATUS"
+          fi
       - name: Deploy CloudFormation stack
         run: |
           aws cloudformation deploy \
