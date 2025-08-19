@@ -17,8 +17,9 @@ jobs:
   # Deployment job - deploys serverless Lambda functions
   # Only runs when commit message contains [deploy] and AWS secrets are configured
   deploy-serverless:
+    name: Deploy Serverless Resources (8AM SGT)
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[deploy]')
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     
     steps:
     - uses: actions/checkout@v3
