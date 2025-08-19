@@ -42,11 +42,6 @@ jobs:
     - name: Run tests
       run: |
         pytest tests/ --cov=src --cov-report=xml
-    
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
 
   # Deployment job - deploys serverless Lambda functions
   # Only runs when commit message contains [deploy] and AWS secrets are configured
@@ -97,7 +92,7 @@ jobs:
 
   infrastructure:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[deploy-infra]')
+    if: github.event_name == 'schedule'
     
     steps:
     - uses: actions/checkout@v3
