@@ -14,6 +14,27 @@ Parameters:
     Description: S3 bucket for data storage
 
 Resources:
+  # VPC for Batch Compute Environment
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: mlops-vpc
+
+  # Subnet for Batch Compute Environment
+  MySubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: us-east-1a
+      Tags:
+        - Key: Name
+          Value: mlops-subnet
   # S3 Bucket for data storage
   DataBucket:
     Type: AWS::S3::Bucket
@@ -86,8 +107,8 @@ Resources:
                   - s3:PutObject
                   - s3:ListBucket
                 Resource:
-                  - !Sub '${DataBucket}/*'
                   - !GetAtt DataBucket.Arn
+                  - !Sub 'arn:aws:s3:::${S3BucketName}-${AWS::AccountId}-${AWS::Region}/*'
 
   # Data Collection Lambda
   DataCollectionLambda:
@@ -215,6 +236,8 @@ Resources:
         DesiredvCpus: 0
         InstanceTypes: ['optimal']
         BidPercentage: 50  # Use Spot instances for 50% cost savings
+        Subnets:
+          - !Ref MySubnet
         Tags:
           Name: !Sub 'mlops-batch-${Environment}'
           Environment: !Ref Environment
