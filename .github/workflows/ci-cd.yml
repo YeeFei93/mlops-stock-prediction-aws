@@ -2,152 +2,123 @@ name: MLOps Stock Prediction CI/CD
 
 on:
   push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
   schedule:
-    # Daily deployment at 8 AM Singapore time (midnight UTC, Singapore is UTC+8)
     - cron: '0 0 * * *'
+  workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
   S3_BUCKET: mlops-stock-data-255945442255-us-east-1
 
 jobs:
-  # Deployment job - deploys serverless Lambda functions
-  # Only runs when commit message contains [deploy] and AWS secrets are configured
   deploy-serverless:
     name: Deploy Serverless Resources (8AM SGT)
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-    
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install boto3 awscli
-    
-    - name: Deploy Lambda function
-      run: |
-        # Create deployment package for Lambda
-        zip -r lambda-deployment.zip lambda_simple.py
-        
-        # Update Lambda function (if it exists)
-        aws lambda update-function-code \
-          --function-name mlops-stock-data-collector \
-          --zip-file fileb://lambda-deployment.zip \
-          --region ${{ env.AWS_REGION }} || echo "Lambda function not found, skipping update"
-    
-    - name: Test Lambda function
-      run: |
-        # Test the deployed Lambda function
-        aws lambda invoke \
-          --function-name mlops-stock-data-collector \
-          --payload '{"symbols": ["AAPL", "GOOGL"]}' \
-          --region ${{ env.AWS_REGION }} \
-          response.json || echo "Lambda test failed, continuing"
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3 awscli
+      - name: Deploy Lambda function
+        run: |
+          # Create deployment package for Lambda
+          zip -r lambda-deployment.zip lambda_simple.py
+          # Update Lambda function (if it exists)
+          aws lambda update-function-code \
+            --function-name mlops-stock-data-collector \
+            --zip-file fileb://lambda-deployment.zip \
+            --region ${{ env.AWS_REGION }} || echo "Lambda function not found, skipping update"
+      - name: Test Lambda function
+        run: |
+          # Test the deployed Lambda function
+          aws lambda invoke \
+            --function-name mlops-stock-data-collector \
+            --payload '{"symbols": ["AAPL", "GOOGL"]}' \
+            --region ${{ env.AWS_REGION }} \
+            response.json || echo "Lambda test failed, continuing"
 
   infrastructure:
+    name: Deploy Infrastructure
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
-    
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Deploy CloudFormation stack
-      run: |
-        aws cloudformation deploy \
-          --template-file infrastructure/cloudformation-template.yaml \
-          --stack-name mlops-stock-prediction-stack \
-          --parameter-overrides \
-            Environment=prod \
-            S3BucketName=$S3_BUCKET \
-          --capabilities CAPABILITY_IAM \
-          --region $AWS_REGION
+      - uses: actions/checkout@v3
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy CloudFormation stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation-template.yaml \
+            --stack-name mlops-stock-prediction-stack \
+            --parameter-overrides \
+              Environment=prod \
+              S3BucketName=$S3_BUCKET \
+            --capabilities CAPABILITY_IAM \
+            --region $AWS_REGION
 
-  # Daily automated deployment job - runs at 8 AM Singapore time to restore resources
   daily-deployment:
+    name: Daily Automated Deployment
     runs-on: ubuntu-latest
-    # Only run on schedule (not on pushes) and on main branch
-    if: github.event_name == 'schedule'
-    
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-        
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install boto3 awscli pandas yfinance scikit-learn
-        pip install -r requirements.txt
-    
-    - name: Deploy complete infrastructure
-      run: |
-        echo "🚀 Daily deployment started at 8 AM Singapore time"
-        python deploy_aws.py
-        
-    - name: Verify deployment
-      run: |
-        echo "✅ Verifying deployment..."
-        # Check S3 bucket
-        aws s3 ls s3://mlops-stock-data-$(python -c "print(str(hash('mlops-stock-prediction'))[-8:])")/ --region ${{ env.AWS_REGION }} || echo "S3 bucket verification failed"
-        
-        # Check Lambda function
-        aws lambda get-function --function-name stock-data-collector --region ${{ env.AWS_REGION }} || echo "Lambda function verification failed"
-        
-        # Check EventBridge rule
-        aws events describe-rule --name daily-stock-collection --region ${{ env.AWS_REGION }} || echo "EventBridge rule verification failed"
-        
-    - name: Test data collection
-      run: |
-        echo "🧪 Testing data collection..."
-        # Trigger the Lambda function to test it works
-        aws lambda invoke \
-          --function-name stock-data-collector \
-          --payload '{"symbols": ["AAPL", "GOOGL", "MSFT"]}' \
-          --region ${{ env.AWS_REGION }} \
-          test-response.json || echo "Lambda test invocation failed"
-          
-        # Show the response
-        if [ -f test-response.json ]; then
-          echo "📊 Lambda response:"
-          cat test-response.json
-        fi
-        
-    - name: Send notification
-      run: |
-        echo "📧 Daily deployment completed successfully!"
-        echo "⏰ Next data collection scheduled for 9 AM UTC (5 PM Singapore time)"
-        echo "💰 Resources deployed and ready for daily stock prediction"
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3 awscli pandas yfinance scikit-learn
+          pip install -r requirements.txt
+      - name: Deploy complete infrastructure
+        run: |
+          echo "🚀 Daily deployment started at 8 AM Singapore time"
+          python deploy_aws.py
+      - name: Verify deployment
+        run: |
+          echo "✅ Verifying deployment..."
+          # Check S3 bucket
+          aws s3 ls s3://mlops-stock-data-$(python -c "print(str(hash('mlops-stock-prediction'))[-8:])")/ --region ${{ env.AWS_REGION }} || echo "S3 bucket verification failed"
+          # Check Lambda function
+          aws lambda get-function --function-name stock-data-collector --region ${{ env.AWS_REGION }} || echo "Lambda function verification failed"
+          # Check EventBridge rule
+          aws events describe-rule --name daily-stock-collection --region ${{ env.AWS_REGION }} || echo "EventBridge rule verification failed"
+      - name: Test data collection
+        run: |
+          echo "🧪 Testing data collection..."
+          # Trigger the Lambda function to test it works
+          aws lambda invoke \
+            --function-name stock-data-collector \
+            --payload '{"symbols": ["AAPL", "GOOGL", "MSFT"]}' \
+            --region ${{ env.AWS_REGION }} \
+            test-response.json || echo "Lambda test invocation failed"
+          # Show the response
+          if [ -f test-response.json ]; then
+            echo "📊 Lambda response:"
+            cat test-response.json
+          fi
+      - name: Send notification
+        run: |
+          echo "📧 Daily deployment completed successfully!"
+          echo "⏰ Next data collection scheduled for 9 AM UTC (5 PM Singapore time)"
+          echo "💰 Resources deployed and ready for daily stock prediction"
