@@ -14,6 +14,23 @@ Parameters:
     Description: S3 bucket for data storage
 
 Resources:
+  # IAM Role for EC2 instances in Batch Compute Environment
+  BatchInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+      Path: /
+      Tags:
+        - Key: Name
+          Value: mlops-batch-ec2-role
   # VPC for Batch Compute Environment
   MyVPC:
     Type: AWS::EC2::VPC
@@ -236,6 +253,7 @@ Resources:
         DesiredvCpus: 0
         InstanceTypes: ['optimal']
         BidPercentage: 50  # Use Spot instances for 50% cost savings
+        InstanceRole: !GetAtt BatchInstanceRole.Arn
         Subnets:
           - !Ref MySubnet
         Tags:
