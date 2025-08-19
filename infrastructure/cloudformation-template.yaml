@@ -260,7 +260,7 @@ Resources:
         DesiredvCpus: 0
         InstanceTypes: ['optimal']
         BidPercentage: 50  # Use Spot instances for 50% cost savings
-  InstanceRole: !Ref BatchInstanceProfile
+        InstanceRole: !Ref BatchInstanceProfile
         Subnets:
           - !Ref MySubnet
         Tags:
