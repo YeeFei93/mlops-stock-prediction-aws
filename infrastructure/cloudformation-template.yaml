@@ -107,7 +107,7 @@ Resources:
       Environment:
         Variables:
           S3_BUCKET: !Ref DataBucket
-  ReservedConcurrentExecutions: 5
+      ReservedConcurrentExecutions: 5
 
   # Inference Lambda
   InferenceLambda:
@@ -127,7 +127,7 @@ Resources:
       Environment:
         Variables:
           S3_BUCKET: !Ref DataBucket
-  ReservedConcurrentExecutions: 10
+      ReservedConcurrentExecutions: 10
 
   # EventBridge rule for scheduled data collection
   DataCollectionSchedule:
