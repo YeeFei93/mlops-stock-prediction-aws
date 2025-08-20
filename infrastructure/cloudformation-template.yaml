@@ -248,7 +248,7 @@ Resources:
       FunctionName: !Ref InferenceLambda
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
-    SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*'
 
   # API Gateway Deployment
   ApiDeployment:
