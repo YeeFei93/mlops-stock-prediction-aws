@@ -14,6 +14,18 @@ Parameters:
     Description: S3 bucket for data storage
 
 Resources:
+  # Security Group for Batch EC2 instances
+  BatchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Batch EC2 compute environment
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: mlops-batch-sg
   # Instance Profile for EC2 instances in Batch Compute Environment
   BatchInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -261,6 +273,8 @@ Resources:
         InstanceTypes: ['optimal']
         BidPercentage: 50  # Use Spot instances for 50% cost savings
         InstanceRole: !Ref BatchInstanceProfile
+        SecurityGroupIds:
+          - !Ref BatchSecurityGroup
         Subnets:
           - !Ref MySubnet
         Tags:
